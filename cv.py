@@ -6,6 +6,8 @@ import glob
 import os
 import platform
 import serial.tools.list_ports
+import threading
+import queue
 
 def list_serial_ports():
     """List available serial ports based on OS"""
@@ -206,23 +208,69 @@ def main():
     for i, port in enumerate(all_ports):
         print(f"{i+1}. {port}")
     
-    # Let user select a port
-    try:
-        selection = int(input("Select the Bluetooth port number: ")) - 1
-        if selection < 0 or selection >= len(all_ports):
-            print("Invalid selection")
-            return
-        selected_port = all_ports[selection]
-    except ValueError:
-        print("Please enter a valid number")
-        return
+    # Windows specific dual-port handling
+    is_dual_port = False
+    rx_port = None
+    tx_port = None
     
-    # Connect to Bluetooth module
+    if system == "Windows":
+        print("\nOn Windows, HC-05 modules create two COM ports.")
+        use_dual = input("Do you want to use both ports to send and receive? (y/n): ").lower().strip()
+        
+        if use_dual == 'y':
+            is_dual_port = True
+            
+            try:
+                print("\nSelect the TX port (for sending commands):")
+                tx_selection = int(input("Enter port number: ")) - 1
+                if tx_selection < 0 or tx_selection >= len(all_ports):
+                    print("Invalid selection")
+                    return
+                tx_port = all_ports[tx_selection]
+                
+                print("\nSelect the RX port (for receiving commands):")
+                rx_selection = int(input("Enter port number: ")) - 1
+                if rx_selection < 0 or rx_selection >= len(all_ports):
+                    print("Invalid selection")
+                    return
+                rx_port = all_ports[rx_selection]
+            except ValueError:
+                print("Please enter valid numbers")
+                return
+        else:
+            # Single port mode
+            try:
+                selection = int(input("\nSelect the Bluetooth port number: ")) - 1
+                if selection < 0 or selection >= len(all_ports):
+                    print("Invalid selection")
+                    return
+                tx_port = all_ports[selection]
+            except ValueError:
+                print("Please enter a valid number")
+                return
+    else:
+        # Mac OS or other - use single port mode
+        try:
+            selection = int(input("Select the Bluetooth port number: ")) - 1
+            if selection < 0 or selection >= len(all_ports):
+                print("Invalid selection")
+                return
+            tx_port = all_ports[selection]
+        except ValueError:
+            print("Please enter a valid number")
+            return
+    
+    # Connect to Bluetooth module(s)
     try:
-        ser = connect_bluetooth(selected_port)
+        tx_ser, rx_ser = connect_bluetooth(tx_port, is_dual_port, rx_port)
+        
+        # Start receiver thread if using dual ports
+        if is_dual_port and rx_ser:
+            receiver_thread = threading.Thread(target=receive_commands_thread, args=(rx_ser,), daemon=True)
+            receiver_thread.start()
         
         # Test connection
-        response = send_command(ser, "PING")
+        response = send_command(tx_ser, "PING")
         if response != "PONG":
             print("Warning: Unexpected response from device")
         
@@ -287,6 +335,11 @@ def main():
         
         print("Starting detection. Press 'q' to quit...")
         print("(Detection may take a moment to process each frame)")
+        
+        # For displaying received messages
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        message_history = []
+        max_messages = 5  # Maximum number of messages to display
         
         while True:
             # Read frame from webcam
@@ -367,7 +420,7 @@ def main():
                 if not people_detected or (current_time - last_detection_time > detection_cooldown):
                     print(f"Motion confirmed! {people_count} people in frame")
                     # Send PERSON:1 command to device
-                    response = send_command(ser, "PERSON:1")
+                    response = send_command(tx_ser, "PERSON:1")
                     
                     people_detected = True
                     last_detection_time = current_time
@@ -378,9 +431,25 @@ def main():
                 if people_detected and (current_time - last_detection_time > detection_cooldown):
                     print("No motion detected")
                     # Send command to device to clear detection
-                    response = send_command(ser, "PERSON:0")
+                    response = send_command(tx_ser, "PERSON:0")
                     
                     people_detected = False
+            
+            # Process received messages (if using dual ports)
+            if is_dual_port:
+                while not received_messages.empty():
+                    msg = received_messages.get()
+                    message_history.append(msg)
+                    if len(message_history) > max_messages:
+                        message_history.pop(0)  # Remove oldest message
+                
+                # Display received messages on frame
+                y_pos = height - 150  # Start position from bottom
+                cv2.rectangle(frame_with_boxes, (10, y_pos - 20), (width - 10, height - 10), (0, 0, 0, 0.5), -1)
+                
+                for i, msg in enumerate(message_history):
+                    cv2.putText(frame_with_boxes, msg, (20, y_pos + (i * 25)), 
+                               font, 0.6, (255, 255, 255), 1)
             
             # Show the frame
             cv2.imshow("Security Camera", frame_with_boxes)
@@ -393,7 +462,9 @@ def main():
         # Clean up
         cap.release()
         cv2.destroyAllWindows()
-        ser.close()
+        tx_ser.close()
+        if is_dual_port and rx_ser:
+            rx_ser.close()
         
     except serial.SerialException as e:
         print(f"Error with serial port: {e}")
