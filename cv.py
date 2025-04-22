@@ -265,13 +265,8 @@ def main():
             if consecutive_detections >= min_detections:
                 if not people_detected or (current_time - last_detection_time > detection_cooldown):
                     print(f"Motion confirmed! {people_count} people in frame")
-                    # Send command to TIVA C and verify response
-                    response = send_command(ser, "LED:R")
-                    # Check if response indicates success
-                    if "set to Red" not in response:
-                        # Retry once more
-                        print("Retry sending command...")
-                        response = send_command(ser, "LED:R")
+                    # Send PERSON:1 command to TIVA C 
+                    response = send_command(ser, "PERSON:1")
                     
                     people_detected = True
                     last_detection_time = current_time
@@ -281,13 +276,8 @@ def main():
             elif consecutive_non_detections >= min_detections:
                 if people_detected and (current_time - last_detection_time > detection_cooldown):
                     print("No motion detected")
-                    # Send command to TIVA C and verify response
-                    response = send_command(ser, "LED:G")
-                    # Check if response indicates success
-                    if "set to Green" not in response:
-                        # Retry once more
-                        print("Retry sending command...")
-                        response = send_command(ser, "LED:G")
+                    # Send command to TIVA C to clear detection
+                    response = send_command(ser, "PERSON:0")
                     
                     people_detected = False
             
