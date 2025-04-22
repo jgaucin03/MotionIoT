@@ -1,0 +1,12 @@
+# Ignore models
+*.pt
+*.weights
+*.onnx
+
+# Ignore model configs
+*.yaml
+*.json
+*.xml
+*.pb
+*.onnx*
+*.names

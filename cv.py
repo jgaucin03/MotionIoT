@@ -4,11 +4,26 @@ import serial
 import time
 import glob
 import os
+import platform
+import serial.tools.list_ports
 
 def list_serial_ports():
-    """List available serial ports on macOS"""
-    ports = glob.glob('/dev/cu.*')
-    return ports
+    """List available serial ports based on OS"""
+    system = platform.system()
+    
+    if system == "Darwin":  # macOS
+        # Original Mac implementation
+        ports = glob.glob('/dev/cu.*')
+        return ports
+    elif system == "Windows":
+        # Windows implementation
+        ports = []
+        for port in serial.tools.list_ports.comports():
+            ports.append(port.device)
+        return ports
+    else:  # Linux or other
+        ports = glob.glob('/dev/tty[A-Za-z]*')
+        return ports
 
 def list_cameras():
     """List available cameras and let user choose one"""
@@ -109,7 +124,56 @@ def download_yolo_files():
     print("All model files ready!")
     return weights_path, config_path, names_path
 
+def setup_yolo_net():
+    """Set up YOLO neural network with appropriate backend based on OS"""
+    # Download YOLO files if needed
+    weights_path, config_path, names_path = download_yolo_files()
+    
+    # Load COCO class names
+    with open(names_path, 'r') as f:
+        classes = f.read().strip().split('\n')
+    
+    # Load YOLOv4-tiny
+    print("Loading YOLOv4-tiny model...")
+    net = cv2.dnn.readNetFromDarknet(config_path, weights_path)
+    
+    # Set backend based on platform
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        # Set backend optimized for M1 Mac
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    elif system == "Windows":
+        # Use CUDA if available on Windows, otherwise OpenCV CPU
+        try:
+            cv2.cuda.getCudaEnabledDeviceCount()
+            has_cuda = cv2.cuda.getCudaEnabledDeviceCount() > 0
+        except:
+            has_cuda = False
+            
+        if has_cuda:
+            net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+            print("Using CUDA acceleration")
+        else:
+            net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            print("CUDA not available, using CPU")
+    else:  # Linux or other
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    
+    # Get output layer names
+    layer_names = net.getLayerNames()
+    output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
+    
+    return net, output_layers, classes
+
 def main():
+    # Display OS information
+    system = platform.system()
+    print(f"Detected operating system: {system}")
+    
     # List available ports
     all_ports = list_serial_ports()
     if not all_ports:
@@ -122,7 +186,7 @@ def main():
     
     # Let user select a port
     try:
-        selection = int(input("Select the HC-05 port number: ")) - 1
+        selection = int(input("Select the Bluetooth port number: ")) - 1
         if selection < 0 or selection >= len(all_ports):
             print("Invalid selection")
             return
@@ -131,33 +195,17 @@ def main():
         print("Please enter a valid number")
         return
     
-    # Connect to HC-05
+    # Connect to Bluetooth module
     try:
         ser = connect_bluetooth(selected_port)
         
         # Test connection
         response = send_command(ser, "PING")
         if response != "PONG":
-            print("Warning: Unexpected response from TIVA C")
+            print("Warning: Unexpected response from device")
         
-        # Download YOLO files if needed
-        weights_path, config_path, names_path = download_yolo_files()
-        
-        # Load COCO class names
-        with open(names_path, 'r') as f:
-            classes = f.read().strip().split('\n')
-        
-        # Load YOLOv4-tiny
-        print("Loading YOLOv4-tiny model...")
-        net = cv2.dnn.readNetFromDarknet(config_path, weights_path)
-        
-        # Set backend to use CPU optimized for M1 Mac
-        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        
-        # Get output layer names
-        layer_names = net.getLayerNames()
-        output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
+        # Setup YOLOv4-tiny neural network
+        net, output_layers, classes = setup_yolo_net()
         
         # Let user select a camera
         print("Scanning for available cameras...")
@@ -265,7 +313,7 @@ def main():
             if consecutive_detections >= min_detections:
                 if not people_detected or (current_time - last_detection_time > detection_cooldown):
                     print(f"Motion confirmed! {people_count} people in frame")
-                    # Send PERSON:1 command to TIVA C 
+                    # Send PERSON:1 command to device
                     response = send_command(ser, "PERSON:1")
                     
                     people_detected = True
@@ -276,7 +324,7 @@ def main():
             elif consecutive_non_detections >= min_detections:
                 if people_detected and (current_time - last_detection_time > detection_cooldown):
                     print("No motion detected")
-                    # Send command to TIVA C to clear detection
+                    # Send command to device to clear detection
                     response = send_command(ser, "PERSON:0")
                     
                     people_detected = False
