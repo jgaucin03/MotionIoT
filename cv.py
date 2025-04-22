@@ -27,62 +27,10 @@ def list_serial_ports():
         ports = glob.glob('/dev/tty[A-Za-z]*')
         return ports
 
-def list_cameras():
-    """List available cameras and let user choose one"""
-    system = platform.system()
-    available_cameras = []
-    
-    # Windows-specific camera handling
-    if system == "Windows":
-        # Try forcing DirectShow backend (correct usage as second parameter)
-        for i in range(5):  # Check first 5 indexes
-            # Use DirectShow backend on Windows
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret:
-                    print(f"Camera index {i} is available")
-                    available_cameras.append(i)
-            cap.release()
-    else:
-        # For Mac and other systems
-        for i in range(10):  # Check first 10 indexes
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret:
-                    print(f"Camera index {i} is available")
-                    available_cameras.append(i)
-                cap.release()
-    
-    if not available_cameras:
-        print("No cameras detected. Using default camera index 0.")
-        print("NOTE: Make sure your webcam is not in use by another application")
-        print("      and check Windows camera privacy settings in Settings → Privacy → Camera")
-        return 0
-    
-    if len(available_cameras) == 1:
-        print(f"Only one camera detected (index {available_cameras[0]}). Using it.")
-        return available_cameras[0]
-    
-    print("Available cameras:")
-    for i, idx in enumerate(available_cameras):
-        print(f"{i+1}. Camera index {idx}")
-    
-    try:
-        selection = int(input("Select camera number: ")) - 1
-        if 0 <= selection < len(available_cameras):
-            return available_cameras[selection]
-        else:
-            print("Invalid selection, using default camera (index 0)")
-            return 0
-    except ValueError:
-        print("Invalid input, using default camera (index 0)")
-        return 0
-
-def connect_bluetooth(port_name):
+def connect_bluetooth(port_name, is_dual_port=False, rx_port_name=None):
     """Connect to the selected Bluetooth device"""
-    ser = serial.Serial(
+    # Connect to the primary (TX) port
+    tx_ser = serial.Serial(
         port=port_name,
         baudrate=9600,
         bytesize=serial.EIGHTBITS,
@@ -90,8 +38,26 @@ def connect_bluetooth(port_name):
         stopbits=serial.STOPBITS_ONE,
         timeout=1
     )
-    print(f"Connected to {port_name} at 9600 baud")
-    return ser
+    print(f"Connected to {port_name} (TX) at 9600 baud")
+    
+    # If dual port mode is enabled, connect to RX port as well
+    rx_ser = None
+    if is_dual_port and rx_port_name:
+        try:
+            rx_ser = serial.Serial(
+                port=rx_port_name,
+                baudrate=9600,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1
+            )
+            print(f"Connected to {rx_port_name} (RX) at 9600 baud")
+        except Exception as e:
+            print(f"Warning: Failed to connect to RX port: {e}")
+            rx_ser = None
+    
+    return tx_ser, rx_ser
 
 def send_command(ser, command):
     """Send command to TIVA C with better reliability"""
@@ -116,6 +82,29 @@ def send_command(ser, command):
     
     print(f"Response: {response}")
     return response
+
+# Message queue for received commands
+received_messages = queue.Queue()
+
+def receive_commands_thread(rx_ser):
+    """Background thread to receive commands from the RX port"""
+    if rx_ser is None:
+        return
+        
+    print("Starting receiver thread...")
+    while True:
+        try:
+            if rx_ser.in_waiting > 0:
+                data = rx_ser.readline().decode('utf-8', errors='replace').strip()
+                if data:
+                    # Add timestamp to message
+                    timestamp = time.strftime("%H:%M:%S", time.localtime())
+                    received_messages.put(f"[{timestamp}] {data}")
+                    print(f"Received: {data}")
+            time.sleep(0.1)  # Small delay to reduce CPU usage
+        except Exception as e:
+            print(f"Error in receiver thread: {e}")
+            break
 
 def download_yolo_files():
     """Download YOLOv4-tiny model files if they don't exist"""
@@ -192,6 +181,59 @@ def setup_yolo_net():
     output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
     
     return net, output_layers, classes
+
+def list_cameras():
+    """List available cameras and let user choose one"""
+    system = platform.system()
+    available_cameras = []
+    
+    # Windows-specific camera handling
+    if system == "Windows":
+        # Try forcing DirectShow backend (correct usage as second parameter)
+        for i in range(5):  # Check first 5 indexes
+            # Use DirectShow backend on Windows
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    print(f"Camera index {i} is available")
+                    available_cameras.append(i)
+            cap.release()
+    else:
+        # For Mac and other systems
+        for i in range(10):  # Check first 10 indexes
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    print(f"Camera index {i} is available")
+                    available_cameras.append(i)
+                cap.release()
+    
+    if not available_cameras:
+        print("No cameras detected. Using default camera index 0.")
+        print("NOTE: Make sure your webcam is not in use by another application")
+        print("      and check Windows camera privacy settings in Settings → Privacy → Camera")
+        return 0
+    
+    if len(available_cameras) == 1:
+        print(f"Only one camera detected (index {available_cameras[0]}). Using it.")
+        return available_cameras[0]
+    
+    print("Available cameras:")
+    for i, idx in enumerate(available_cameras):
+        print(f"{i+1}. Camera index {idx}")
+    
+    try:
+        selection = int(input("Select camera number: ")) - 1
+        if 0 <= selection < len(available_cameras):
+            return available_cameras[selection]
+        else:
+            print("Invalid selection, using default camera (index 0)")
+            return 0
+    except ValueError:
+        print("Invalid input, using default camera (index 0)")
+        return 0
 
 def main():
     # Display OS information
@@ -445,7 +487,7 @@ def main():
                 
                 # Display received messages on frame
                 y_pos = height - 150  # Start position from bottom
-                cv2.rectangle(frame_with_boxes, (10, y_pos - 20), (width - 10, height - 10), (0, 0, 0, 0.5), -1)
+                cv2.rectangle(frame_with_boxes, (10, y_pos - 20), (width - 10, height - 10), (0, 0, 0), -1)
                 
                 for i, msg in enumerate(message_history):
                     cv2.putText(frame_with_boxes, msg, (20, y_pos + (i * 25)), 
