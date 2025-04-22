@@ -32,10 +32,10 @@ def list_cameras():
     
     # Windows-specific camera handling
     if system == "Windows":
-        # Try forcing DirectShow backend
+        # Try forcing DirectShow backend (correct usage as second parameter)
         for i in range(5):  # Check first 5 indexes
-            # Use DirectShow backend on Windows (0x400 flag is CAP_DSHOW)
-            cap = cv2.VideoCapture(i + cv2.CAP_DSHOW)
+            # Use DirectShow backend on Windows
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
             if cap.isOpened():
                 ret, frame = cap.read()
                 if ret:
@@ -55,6 +55,8 @@ def list_cameras():
     
     if not available_cameras:
         print("No cameras detected. Using default camera index 0.")
+        print("NOTE: Make sure your webcam is not in use by another application")
+        print("      and check Windows camera privacy settings in Settings → Privacy → Camera")
         return 0
     
     if len(available_cameras) == 1:
@@ -235,10 +237,9 @@ def main():
         # Initialize selected webcam
         print("Attempting to access webcam...")
         
-        # Use DirectShow backend on Windows
+        # Use DirectShow backend on Windows (correct usage as second parameter)
         if platform.system() == "Windows":
-            # DirectShow (0x400 flag is CAP_DSHOW)
-            cap = cv2.VideoCapture(camera_index + cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         else:
             cap = cv2.VideoCapture(camera_index)
         
@@ -246,11 +247,12 @@ def main():
         if not cap.isOpened():
             print("Failed to open webcam. Trying alternative methods...")
             
-            # Try alternative methods
+            # Try alternative methods with correct parameter order
             alternatives = [
                 lambda: cv2.VideoCapture(camera_index),  # Standard method
-                lambda: cv2.VideoCapture(camera_index + cv2.CAP_DSHOW),  # DirectShow
-                lambda: cv2.VideoCapture(camera_index + cv2.CAP_MSMF),   # Media Foundation
+                lambda: cv2.VideoCapture(camera_index, cv2.CAP_DSHOW),  # DirectShow
+                lambda: cv2.VideoCapture(camera_index, cv2.CAP_MSMF),   # Media Foundation
+                lambda: cv2.VideoCapture(0, cv2.CAP_DSHOW),  # Default camera with DirectShow
                 lambda: cv2.VideoCapture(0)   # Default camera as last resort
             ]
             
@@ -265,7 +267,11 @@ def main():
                     cap.release()
             
             if not cap.isOpened():
-                print("Failed to open webcam after multiple attempts. Please check your camera.")
+                print("Failed to open webcam after multiple attempts.")
+                print("Please check:")
+                print("1. Windows camera privacy settings (Settings → Privacy → Camera)")
+                print("2. That your webcam is not being used by another application")
+                print("3. That your webcam drivers are properly installed")
                 return
         
         # Configure detection parameters
