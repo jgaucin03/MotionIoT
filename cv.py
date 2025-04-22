@@ -27,18 +27,34 @@ def list_serial_ports():
 
 def list_cameras():
     """List available cameras and let user choose one"""
+    system = platform.system()
     available_cameras = []
-    for i in range(10):  # Check first 10 indexes
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                print(f"Camera index {i} is available")
-                available_cameras.append(i)
+    
+    # Windows-specific camera handling
+    if system == "Windows":
+        # Try forcing DirectShow backend
+        for i in range(5):  # Check first 5 indexes
+            # Use DirectShow backend on Windows (0x400 flag is CAP_DSHOW)
+            cap = cv2.VideoCapture(i + cv2.CAP_DSHOW)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    print(f"Camera index {i} is available")
+                    available_cameras.append(i)
             cap.release()
+    else:
+        # For Mac and other systems
+        for i in range(10):  # Check first 10 indexes
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    print(f"Camera index {i} is available")
+                    available_cameras.append(i)
+                cap.release()
     
     if not available_cameras:
-        print("No cameras detected")
+        print("No cameras detected. Using default camera index 0.")
         return 0
     
     if len(available_cameras) == 1:
@@ -49,11 +65,15 @@ def list_cameras():
     for i, idx in enumerate(available_cameras):
         print(f"{i+1}. Camera index {idx}")
     
-    selection = int(input("Select camera number: ")) - 1
-    if 0 <= selection < len(available_cameras):
-        return available_cameras[selection]
-    else:
-        print("Invalid selection, using default camera (index 0)")
+    try:
+        selection = int(input("Select camera number: ")) - 1
+        if 0 <= selection < len(available_cameras):
+            return available_cameras[selection]
+        else:
+            print("Invalid selection, using default camera (index 0)")
+            return 0
+    except ValueError:
+        print("Invalid input, using default camera (index 0)")
         return 0
 
 def connect_bluetooth(port_name):
@@ -214,12 +234,39 @@ def main():
         
         # Initialize selected webcam
         print("Attempting to access webcam...")
-        cap = cv2.VideoCapture(camera_index)
+        
+        # Use DirectShow backend on Windows
+        if platform.system() == "Windows":
+            # DirectShow (0x400 flag is CAP_DSHOW)
+            cap = cv2.VideoCapture(camera_index + cv2.CAP_DSHOW)
+        else:
+            cap = cv2.VideoCapture(camera_index)
         
         # Check if webcam opened successfully
         if not cap.isOpened():
-            print("Failed to open webcam. Please check permissions.")
-            return
+            print("Failed to open webcam. Trying alternative methods...")
+            
+            # Try alternative methods
+            alternatives = [
+                lambda: cv2.VideoCapture(camera_index),  # Standard method
+                lambda: cv2.VideoCapture(camera_index + cv2.CAP_DSHOW),  # DirectShow
+                lambda: cv2.VideoCapture(camera_index + cv2.CAP_MSMF),   # Media Foundation
+                lambda: cv2.VideoCapture(0)   # Default camera as last resort
+            ]
+            
+            for attempt, alt_method in enumerate(alternatives):
+                print(f"Attempt {attempt+1}...")
+                cap = alt_method()
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret:
+                        print("Camera accessed successfully!")
+                        break
+                    cap.release()
+            
+            if not cap.isOpened():
+                print("Failed to open webcam after multiple attempts. Please check your camera.")
+                return
         
         # Configure detection parameters
         min_confidence = 0.5  # Minimum confidence for person detection
