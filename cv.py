@@ -473,7 +473,7 @@ def main():
                 if not people_detected or (current_time - last_detection_time > detection_cooldown):
                     print(f"Motion confirmed! {people_count} people in frame")
                     # Send PERSON:1 command to device
-                    response = send_command(tx_ser, "PERSON:1")
+                    response = send_command(tx_ser, "1") # MODIFIED
                     
                     people_detected = True
                     last_detection_time = current_time
@@ -483,8 +483,8 @@ def main():
             elif consecutive_non_detections >= min_detections:
                 if people_detected and (current_time - last_detection_time > detection_cooldown):
                     print("No motion detected")
-                    # Send command to device to clear detection
-                    response = send_command(tx_ser, "PERSON:0")
+                    # Send command to device to clear detection # MODIFIED
+                    response = send_command(tx_ser, "0")
                     
                     people_detected = False
             
@@ -682,8 +682,8 @@ def main_step2():
         print("\n==== DETECTION TEST MODE ====")
         print("This test will show person detection but requires manual commands.")
         print("Instructions:")
-        print("  p - Send PERSON:1 command (detected)")
-        print("  n - Send PERSON:0 command (not detected)")
+        print("  p - Send PERSON:1 (just '1') command (detected)")
+        print("  n - Send PERSON:0 (just '0') command (not detected)")
         print("  s - Send STATUS command")
         print("  q - Quit test")
         print("\nPress any key to start detection view...")
@@ -802,4 +802,4 @@ def main_step2():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main_step1()
+    main()

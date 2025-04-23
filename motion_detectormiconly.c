@@ -1,5 +1,3 @@
-
-
 // Lab2.c
 // Runs on either MSP432 or TM4C123
 // Starter project to Lab 2.  Take sensor readings, process the data,
@@ -63,10 +61,8 @@
  
  uint8_t But1=1;
  uint8_t But2=1;
- uint8_t Saw=0;
- uint8_t Heard=0;
- uint16_t ArmCount = 0;
- 
+ uint8_t Saw=1;
+ uint8_t Heart=1;
  // semaphores
  int32_t NewData;  // true when new numbers to display on top of LCD
  int32_t LCDmutex; // exclusive access to LCD
@@ -77,14 +73,6 @@
    Microphone,
    Temperature
  };
- 
- enum ArmState{
-     On,
-     Off
- };
- 
- enum ArmState Armed = Off;
- enum ArmState ArmWas = On;
  enum plotstate PlotState = Cam;
  //color constants
  #define BGCOLOR     LCD_BLACK
@@ -100,14 +88,7 @@
  //------------ end of Global variables shared between tasks -------------
  
  
- 
- 
- 
- 
- #include <stdint.h>
- #include <stdbool.h>
- #include <string.h>
- #include "tm4c123gh6pm.h"
+ #define SOUND_THRESHOLD 517  // Adjused this based on testing with microphone
  
  // LED Colors
  #define LED_RED     0x02
@@ -306,41 +287,30 @@
  // Inputs:  none
  // Outputs: none
  void Task0(void){
-   uint16_t DetCount = 0;
-     uint16_t ChirpCount = 0;
-     
-     while(1) {
-         
+   
+   
+   while(1) {
          int c = UART1_ReceiveChar();
          
          if(c != -1) {  // If data received
              // Echo character back for terminal feedback
              UART1_SendChar((uint8_t)c);
              
-                     
-                     if ( c == '1'){
-                         DetCount = 0;
-                         if (PlotState == Cam && (Saw == 0 || ChirpCount >= 1) && Armed == On){
-                             BSP_Buzzer_Set(512);  
-                             ChirpCount = 0;
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                         }
-                         
-                             
-                             
-                         Saw = 1;}
-                         
-                     if( DetCount > 3)
-                         Saw = 0;
-                     
-                     DetCount ++;
-                     ChirpCount ++;
-                        
- 
+             // Check for carriage return or newline (command terminator)
+             if (c == '\r' || c == '\n') {
+                 if (rxIndex > 0) {
+                     // Process the command
+                     UART1_SendString("\r\n");  // Add newline for better readability
+                     processCommand();
+                 }
+             }
+             else if (rxIndex < BUFFER_SIZE - 1) {
+                 // Add character to buffer
+                 rxBuffer[rxIndex++] = (char)c;
+             }
          }
      }
-     
+   
    
  }
  /* ****************************************** */
@@ -361,60 +331,47 @@
  // sends data to Task2
  // Inputs:  none
  // Outputs: none
- 
-  #define SOUND_THRESHOLD 517  // Adjused this based on testing with microphone
-  
- 
- 
-  void Task1(void){
-      uint32_t squared;
-      static int32_t soundSum = 0;
-      static int time = 0; // units of microphone sampling rate
-      static bool soundDetected = false;
-      static int soundCounter = 0;  // For debouncing sound detection
-      uint16_t HDetCount = 0;
-      
-      
-      while(1){
-          Profile_Toggle0(); 
-          BSP_Microphone_Input(&SoundData);
-          soundSum = soundSum + (int32_t)SoundData;
-          SoundArray[time] = SoundData;
-          time = time + 1;
-          
-          // Sound threshold detection
-          if(PlotState == Microphone) {
-              // Check if sound is above threshold
-              if(SoundData > SOUND_THRESHOLD) {
-                  soundCounter++;
-                  if(soundCounter > 10) {  // Require multiple samples above threshold
-                                      
-                                      HDetCount = 0;
-                      Heard = 1;
-                      
-                  }
-              } else {
-                  soundCounter = 0;
-                  if(Heard && HDetCount > 20) {
-                      Heard = 0;
-                  }
-              }
-                          if(Heard){
-                          HDetCount++;
-                              BSP_Delay1ms(27);
-                          }
-                          
-          }
-          
-          if(time == SOUNDRMSLENGTH){
-              SoundAvg = soundSum/SOUNDRMSLENGTH;
-              OS_FIFO_Put(SoundAvg);
-              soundSum = 0;
-              OS_Signal(&NewData); // makes task5 run every 1 sec
-              time = 0;
-          }
-      }
-  }
+ void Task1(void){
+     uint32_t squared;
+     static int32_t soundSum = 0;
+     static int time = 0; // units of microphone sampling rate
+     static bool soundDetected = false;
+     static int soundCounter = 0;  // For debouncing sound detection
+     
+     while(1){
+         Profile_Toggle0(); 
+         BSP_Microphone_Input(&SoundData);
+         soundSum = soundSum + (int32_t)SoundData;
+         SoundArray[time] = SoundData;
+         time = time + 1;
+         
+         // Sound threshold detection
+         if(PlotState == Microphone) {
+             // Check if sound is above threshold
+             if(SoundData > SOUND_THRESHOLD) {
+                 soundCounter++;
+                 if(soundCounter > 10) {  // Require multiple samples above threshold
+                     soundDetected = true;
+                     But1 = 0;  // Simulate button press to trigger detection
+                 }
+             } else {
+                 soundCounter = 0;
+                 if(soundDetected) {
+                     soundDetected = false;
+                     But1 = 1;  // Reset button state
+                 }
+             }
+         }
+         
+         if(time == SOUNDRMSLENGTH){
+             SoundAvg = soundSum/SOUNDRMSLENGTH;
+             OS_FIFO_Put(SoundAvg);
+             soundSum = 0;
+             OS_Signal(&NewData); // makes task5 run every 1 sec
+             time = 0;
+         }
+     }
+ }
  /* ****************************************** */
  /*          End of Task1 Section              */
  /* ****************************************** */
@@ -452,127 +409,51 @@
    OS_Signal(&LCDmutex);  ReDrawAxes = 0;
  }
  void Task2(void){
-   drawaxes();
-   while(1){
+     uint32_t data;
+     uint32_t localMin;
+     uint32_t localMax;
+     uint32_t localCount;
+     localMin = 1024;
+     localMax = 0;
+     localCount = 0;
+     drawaxes();
+     
+     while(1){
+         data = OS_MailBox_Recv();
  
-     if(ReDrawAxes){
-       drawaxes();
-       ReDrawAxes = 0;
-     }
-     OS_Wait(&LCDmutex);
-         if (But1 == 0 && But2 == 0)
-         {
-             
-             if(ArmCount >= 10)
-             {
-                 if(Armed == On)
-                     Armed = Off;
- 
-                                 BSP_Delay1ms(250);
- 
-                 
-                 BSP_Buzzer_Set(512);  
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                 
-                 
-                 BSP_Buzzer_Set(512);  
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                 
-                 
-                 BSP_Buzzer_Set(512);  
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                 
-                 
-                 ArmCount = 0;
-                 
-                 BSP_Delay1ms(250);
-                 
-             }else if (Armed == Off){
-                     Armed = On;
-                 
-                                 BSP_Delay1ms(250);
- 
-                 
-                 BSP_Buzzer_Set(512);  
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                 
-                 
-                 BSP_Buzzer_Set(512);  
-                             BSP_Delay1ms(100);
-                             BSP_Buzzer_Set(0);
-                 
-                 BSP_Delay1ms(250);
-                 
-                 ArmCount = 0;
-             }
-                 ArmCount++;
-             }
-         else if(Armed == Off){
-             BSP_LCD_PlotPoint(30, NOCOLOR);
-             if (ArmWas == On){
-             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
-             ArmWas = Off;
-             }
-             
-             BSP_LCD_DrawString(5, 5, "Alarm",  NOCOLOR);
-             BSP_LCD_DrawString(5, 6, "System",  NOCOLOR);
-             BSP_LCD_DrawString(5, 7, "Disabled",  NOCOLOR);
-             
+         if(ReDrawAxes){
+             drawaxes();
+             ReDrawAxes = 0;
          }
-     else if ( PlotState == Cam && ( But1 == 0 || Saw ==1)){
          
-             if (ArmWas == Off){
-             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
-             ArmWas = On;
-             }
-             
+         OS_Wait(&LCDmutex);
+         
+         // If no detection (But1 is not pressed)
+         if(But1 != 0){
+             BSP_LCD_PlotPoint(30, NOCOLOR);
+             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK); // Clear previous detection message
+         } 
+         // Person detected via camera
+         else if(But1 == 0 && PlotState == Cam){
              BSP_LCD_PlotPoint(150, PERSONCOLOR);
-             
-       BSP_LCD_DrawString(5, 5, "Person",  PERSONCOLOR);
+             BSP_LCD_DrawString(5, 5, "Person",  PERSONCOLOR);
              BSP_LCD_DrawString(5, 6, "Detected",  PERSONCOLOR);
              BSP_LCD_DrawString(5, 7, "Camera",  PERSONCOLOR);
-             
              BSP_Delay1ms(25);
-             
          }
-         else if(PlotState == Microphone && (But1 == 0 || Heard == 1)){
-             
-             if (ArmWas == Off){
-             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
-             ArmWas = On;
-             }
-             
-       BSP_LCD_PlotPoint(SoundData/10, SOUNDCOLOR);
-             
+         // Person detected via microphone
+         else if(But1 == 0 && PlotState == Microphone){
+             BSP_LCD_PlotPoint(SoundData/10, SOUNDCOLOR);
              BSP_LCD_PlotPoint(150, HEARDCOLOR);
-             
-       BSP_LCD_DrawString(5, 5, "Person",  HEARDCOLOR);
+             BSP_LCD_DrawString(5, 5, "Person",  HEARDCOLOR);
              BSP_LCD_DrawString(5, 6, "Detected",  HEARDCOLOR);
              BSP_LCD_DrawString(5, 7, "Mic",  HEARDCOLOR);
-             
              BSP_Delay1ms(25);
-             
-             
-             
-     } else if((Saw == 0 && PlotState == Cam) || But1 != 0  ){
-       BSP_LCD_PlotPoint(30, NOCOLOR);
-             
-             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
-             
-     } 
+         }
          
- //		else if(PlotState == Temperature){
- //      BSP_LCD_PlotPoint(TemperatureData, TEMPCOLOR);
- //    } else if(PlotState == Light){
- //      BSP_LCD_PlotPoint(LightData, LIGHTCOLOR);
- //    }
-     BSP_LCD_PlotIncrement();
-     OS_Signal(&LCDmutex);
-   }
+         BSP_LCD_PlotIncrement();
+         OS_Signal(&LCDmutex);
+     }
  }
  /* ****************************************** */
  /*          End of Task2 Section              */
@@ -587,60 +468,47 @@
  // Inputs:  none
  // Outputs: none
  void Task3(void){
-   static uint8_t prev1 = 0, prev2 = 0;
+     static uint8_t prev1 = 0, prev2 = 0;
  
-   BSP_Button1_Init();
-   BSP_Button2_Init();
-   BSP_Buzzer_Init(0);
-   BSP_RGB_Init(0, 0, 0);
-   while(1){
-     Profile_Toggle3(); // viewed by a real logic analyzer to know Task3 started
-     BSP_Buzzer_Set(0);
-     But1 = BSP_Button2_Input();
-     if((But1 == 0) && (prev1 != 0)){
- //      // Button1 was pressed since last loop
-       
-         //	Armed = On;
-             
- //      } else if(PlotState == Temperature){
- //        PlotState = Accelerometer;
- //      }
- //      ReDrawAxes = 1;                // redraw axes on next call of display task
-       BSP_Buzzer_Set(512);           // beep until next call of this task
-     }
-     prev1 = But1;
-     But2 = BSP_Button1_Input();
-     if((But2 == 0) && (prev2 != 0)){
-               // redraw axes on next call of display task
-             
-                         if(PlotState == Cam){
-                                 PlotState = Microphone;
-                         }else if(PlotState == Microphone){
-                                 PlotState = Cam;}
-         //	BSP_LCD_FillRect(0, 0, 90, 40, LCD_BLUE);
-             //Armed = Off;
-             
-       //BSP_LCD_DrawString(0, 1, "Sound",  PERSONCOLOR);
-             
-             
-       
-             
-             //	BSP_LCD_FillRect(0, 0, 90, 40, LCD_BLUE);
-             
-                 //BSP_LCD_DrawString(0, 1, "Cam",  PERSONCOLOR);
-             
+     BSP_Button1_Init();
+     BSP_Button2_Init();
+     BSP_Buzzer_Init(0);
+     BSP_RGB_Init(0, 0, 0);
+     
+     while(1){
+         Profile_Toggle3();
+         BSP_Buzzer_Set(0);
+         But1 = BSP_Button2_Input();
          
-             
- 
- 
-       BSP_Buzzer_Set(512);           // beep until next call of this task
+         if((But1 == 0) && (prev1 != 0)){
+             BSP_Buzzer_Set(512);
+         }
+         prev1 = But1;
+         
+         But2 = BSP_Button1_Input();
+         if((But2 == 0) && (prev2 != 0)){
+             // Toggle between Camera and Microphone modes
+             if(PlotState == Cam){
+                 PlotState = Microphone;
+                 OS_Wait(&LCDmutex);
+                 BSP_LCD_FillRect(0, 0, 90, 70, LCD_BLACK); // Clear previous mode display
+                 BSP_LCD_DrawString(0, 0, "Mode: MIC", SOUNDCOLOR);
+                 OS_Signal(&LCDmutex);
+             } else if(PlotState == Microphone){
+                 PlotState = Cam;
+                 OS_Wait(&LCDmutex);
+                 BSP_LCD_FillRect(0, 0, 90, 70, LCD_BLACK); // Clear previous mode display
+                 BSP_LCD_DrawString(0, 0, "Mode: CAM", PERSONCOLOR);
+                 OS_Signal(&LCDmutex);
+             }
+             BSP_Buzzer_Set(512);
+         }
+         prev2 = But2;
+         
+         BSP_Delay1ms(5);
      }
-     prev2 = But2;
- 
-     BSP_Delay1ms(5); // very inefficient, but does debounce the switches
-   }
- 
  }
+   
  /* ****************************************** */
  /*          End of Task3 Section              */
  /* ****************************************** */
@@ -661,21 +529,21 @@
    Task0_Init();    // microphone init
    Task1_Init();    // accelerometer init
    BSP_LCD_Init();
-     BSP_LCD_FillScreen(BSP_LCD_Color565(0, 0, 0));
-     BSP_LCD_Drawaxes(PERSONCOLOR, BGCOLOR, "Time", "", 0,"", 0, 500, 0);
-     BSP_LCD_DrawString(0,1, "Security Sys",  PERSONCOLOR);
+   BSP_LCD_FillScreen(BSP_LCD_Color565(0, 0, 0));
+   BSP_LCD_Drawaxes(PERSONCOLOR, BGCOLOR, "Time", "", 0,"", 0, 500, 0);
+   BSP_LCD_DrawString(0,1, "Security State",  PERSONCOLOR);
    Time = 0;
    OS_InitSemaphore(&NewData, 0);  // 0 means no data
    OS_InitSemaphore(&LCDmutex, 1); // 1 means free
    OS_MailBox_Init();              // initialize mailbox used to send data between Task1 and Task2
-     OS_FIFO_Init();
-     // Tasks 0, 1 will not run
+   OS_FIFO_Init();
+   // Tasks 0, 1 will not run
  // Task2, Task3, Task4, Task5 are main threads
  // Tasks 2 and 5 will stall
    OS_AddThreads(&Task2, &Task3, &Task0,&Task1);
-     
-     
-         // Initialize systems
+   
+   
+       // Initialize systems
      LED_Init();
      
      // Initially set LED to red to show we're starting
@@ -691,14 +559,36 @@
      // Send startup message
      UART1_SendString("\r\nTIVA C Command Processor Ready\r\n");
      
-     
+   
+ //	// Main command processing loop
+ //    while(1) {
+ //        int c = UART1_ReceiveChar();
+ //        
+ //        if(c != -1) {  // If data received
+ //            // Echo character back for terminal feedback
+ //            UART1_SendChar((uint8_t)c);
+ //            
+ //            // Check for carriage return or newline (command terminator)
+ //            if (c == '\r' || c == '\n') {
+ //                if (rxIndex > 0) {
+ //                    // Process the command
+ //                    UART1_SendString("\r\n");  // Add newline for better readability
+ //                    processCommand();
+ //                }
+ //            }
+ //            else if (rxIndex < BUFFER_SIZE - 1) {
+ //                // Add character to buffer
+ //                rxBuffer[rxIndex++] = (char)c;
+ //            }
+ //        }
+ //    }
  
  //	
-     
+   
    // when grading change 1000 to 4-digit number from edX
    OS_Launch(BSP_Clock_GetFreq()/THREADFREQ); // doesn't return, interrupts enabled in here
-     
-     
-     
+   
+   
+   
    return 0;             // this never executes
  }
