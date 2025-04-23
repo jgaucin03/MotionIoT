@@ -59,29 +59,40 @@ def connect_bluetooth(port_name, is_dual_port=False, rx_port_name=None):
     
     return tx_ser, rx_ser
 
-def send_command(ser, command):
-    """Send command to TIVA C with better reliability"""
-    print(f"Sending: {command}")
+def send_command(tx_ser, command):
+    """Send command to TIVA C with extensive debugging"""
+    print(f"DEBUG: Sending to {tx_ser.port}: '{command}'")
     
     # Clear input buffer first
-    ser.reset_input_buffer()
+    tx_ser.reset_input_buffer()
     
     # Send command with newline
-    ser.write((command + '\r\n').encode('utf-8'))
+    tx_ser.write((command + '\r\n').encode('utf-8'))
+    print(f"DEBUG: Command bytes sent, waiting for response...")
     
-    # Wait for response with a timeout
+    # Wait for response with a timeout (increased to 3 seconds)
     start_time = time.time()
     response = ""
     
-    while time.time() - start_time < 0.5:  # 500ms timeout
-        if ser.in_waiting > 0:
-            response += ser.readline().decode('utf-8', errors='replace').strip()
-            if response:  # Got something, break out
+    while time.time() - start_time < 3.0:  # 3-second timeout for debugging
+        if tx_ser.in_waiting > 0:
+            chunk = tx_ser.read(tx_ser.in_waiting).decode('utf-8', errors='replace')
+            print(f"DEBUG: Read {len(chunk)} bytes: '{chunk}'")
+            response += chunk
+            if '\n' in chunk:  # Got a complete line
                 break
-        time.sleep(0.05)  # Small delay
+        else:
+            # Print status every half second
+            if int((time.time() - start_time) * 2) % 2 == 0:  # Every 0.5 seconds
+                print(f"DEBUG: Waiting... ({time.time() - start_time:.1f}s elapsed)")
+            time.sleep(0.1)
     
-    print(f"Response: {response}")
-    return response
+    # Print timeout if it occurred
+    if time.time() - start_time >= 3.0:
+        print(f"DEBUG: Timeout after 3 seconds waiting for response from {tx_ser.port}")
+    
+    print(f"DEBUG: Final response: '{response.strip()}'")
+    return response.strip()
 
 # Message queue for received commands
 received_messages = queue.Queue()
@@ -515,5 +526,280 @@ def main():
         import traceback
         traceback.print_exc()
 
+
+def main_step1():
+    """
+    Test Step 1: Basic UART Communication Only
+    
+    This test focuses solely on establishing and verifying UART communication
+    with the Tiva C microcontroller. No camera or person detection is performed.
+    """
+    # Display OS information
+    system = platform.system()
+    print(f"Detected operating system: {system}")
+    
+    # List available ports
+    all_ports = list_serial_ports()
+    if not all_ports:
+        print("No serial ports found.")
+        return
+    
+    print("Available ports:")
+    for i, port in enumerate(all_ports):
+        print(f"{i+1}. {port}")
+    
+    # Select port
+    try:
+        selection = int(input("Select the Bluetooth port number: ")) - 1
+        if selection < 0 or selection >= len(all_ports):
+            print("Invalid selection")
+            return
+        selected_port = all_ports[selection]
+    except ValueError:
+        print("Please enter a valid number")
+        return
+    
+    # Connect to Bluetooth module
+    try:
+        tx_ser, _ = connect_bluetooth(selected_port)
+        
+        print("\n==== UART TEST MODE ====")
+        print("This test will only verify UART communication.")
+        print("Commands:")
+        print("  1 - Send PING command")
+        print("  2 - Send STATUS command")
+        print("  3 - Send LED:R command")
+        print("  4 - Send LED:G command")
+        print("  5 - Send LED:B command")
+        print("  q - Quit test")
+        
+        # Main test loop
+        while True:
+            cmd = input("\nEnter command (1-5, q): ").strip().lower()
+            
+            if cmd == 'q':
+                break
+            elif cmd == '1':
+                # Test with multiple PINGs to verify reliability
+                for i in range(5):
+                    print(f"\nPING test {i+1} of 5:")
+                    response = send_command(tx_ser, "PING")
+                    print(f"Received response: '{response}'")
+                    success = response.startswith() == "PONG"
+                    print(f"Test {'PASSED' if success else 'FAILED'}")
+                    time.sleep(0.5)
+            elif cmd == '2':
+                response = send_command(tx_ser, "STATUS")
+                print(f"Received status: '{response}'")
+            elif cmd == '3':
+                response = send_command(tx_ser, "LED:R")
+                print(f"LED command response: '{response}'")
+            elif cmd == '4':
+                response = send_command(tx_ser, "LED:G")
+                print(f"LED command response: '{response}'")
+            elif cmd == '5':
+                response = send_command(tx_ser, "LED:B")
+                print(f"LED command response: '{response}'")
+            else:
+                print("Invalid command. Please try again.")
+        
+        # Clean up
+        tx_ser.close()
+        print("Test complete. UART port closed.")
+        
+    except serial.SerialException as e:
+        print(f"Error with serial port: {e}")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+def main_step2():
+    """
+    Test Step 2: UART + Person Detection Commands Only
+    
+    This test adds camera-based person detection but does not
+    continuously send detection messages to the Tiva C.
+    Instead, it lets you control when to send the detection commands.
+    """
+    # Display OS information
+    system = platform.system()
+    print(f"Detected operating system: {system}")
+    
+    # List available ports
+    all_ports = list_serial_ports()
+    if not all_ports:
+        print("No serial ports found.")
+        return
+    
+    print("Available ports:")
+    for i, port in enumerate(all_ports):
+        print(f"{i+1}. {port}")
+    
+    # Select port
+    try:
+        selection = int(input("Select the Bluetooth port number: ")) - 1
+        if selection < 0 or selection >= len(all_ports):
+            print("Invalid selection")
+            return
+        selected_port = all_ports[selection]
+    except ValueError:
+        print("Please enter a valid number")
+        return
+    
+    # Connect to Bluetooth module
+    try:
+        tx_ser, _ = connect_bluetooth(selected_port)
+        
+        # Test connection
+        response = send_command(tx_ser, "PING")
+        if response != "PONG":
+            print("Warning: Unexpected response from device. Continuing anyway...")
+        
+        # Setup YOLOv4-tiny neural network
+        net, output_layers, classes = setup_yolo_net()
+        
+        # Let user select a camera
+        print("Scanning for available cameras...")
+        camera_index = list_cameras()
+        print(f"Using camera with index {camera_index}")
+        
+        # Initialize selected webcam
+        print("Attempting to access webcam...")
+        if platform.system() == "Windows":
+            cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        else:
+            cap = cv2.VideoCapture(camera_index)
+        
+        # Check if webcam opened successfully
+        if not cap.isOpened():
+            print("Failed to open webcam. Please check permissions.")
+            return
+        
+        # Configure detection parameters
+        min_confidence = 0.5  # Minimum confidence for person detection
+        
+        print("\n==== DETECTION TEST MODE ====")
+        print("This test will show person detection but requires manual commands.")
+        print("Instructions:")
+        print("  p - Send PERSON:1 command (detected)")
+        print("  n - Send PERSON:0 command (not detected)")
+        print("  s - Send STATUS command")
+        print("  q - Quit test")
+        print("\nPress any key to start detection view...")
+        input()
+        
+        # For detection status display
+        people_detected = False
+        
+        while True:
+            # Read frame from webcam
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame. Check camera.")
+                time.sleep(0.5)
+                continue
+            
+            # Get frame dimensions
+            height, width, channels = frame.shape
+            
+            # Create a blob and pass it through the network
+            blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+            net.setInput(blob)
+            outs = net.forward(output_layers)
+            
+            # Initialize lists for detected objects
+            class_ids = []
+            confidences = []
+            boxes = []
+            
+            # Process each output layer
+            for out in outs:
+                for detection in out:
+                    scores = detection[5:]
+                    class_id = np.argmax(scores)
+                    confidence = scores[class_id]
+                    
+                    # Filter out weak predictions and non-person detections
+                    if confidence > min_confidence and class_id == 0:  # Class 0 is person in COCO
+                        # Object detected is a person
+                        center_x = int(detection[0] * width)
+                        center_y = int(detection[1] * height)
+                        w = int(detection[2] * width)
+                        h = int(detection[3] * height)
+                        
+                        # Rectangle coordinates
+                        x = int(center_x - w / 2)
+                        y = int(center_y - h / 2)
+                        
+                        boxes.append([x, y, w, h])
+                        confidences.append(float(confidence))
+                        class_ids.append(class_id)
+            
+            # Apply non-maximum suppression to remove redundant overlapping boxes
+            indexes = cv2.dnn.NMSBoxes(boxes, confidences, min_confidence, 0.4)
+            
+            # Count people after NMS
+            people_count = len(indexes)
+            
+            # Draw bounding boxes
+            frame_with_boxes = frame.copy()
+            for i in range(len(boxes)):
+                if i in indexes:
+                    x, y, w, h = boxes[i]
+                    label = f"Person: {confidences[i]:.2f}"
+                    cv2.rectangle(frame_with_boxes, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    cv2.putText(frame_with_boxes, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            
+            # Display detection status
+            cv2.putText(frame_with_boxes, f"People detected: {people_count}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Add instructional overlay
+            cv2.putText(frame_with_boxes, "Manual control: p=detected, n=not detected, s=status, q=quit", 
+                       (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            
+            # Show current detection state
+            status_color = (0, 255, 0) if people_detected else (0, 0, 255)
+            status_text = "DETECTION: ACTIVE" if people_detected else "DETECTION: INACTIVE"
+            cv2.putText(frame_with_boxes, status_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+            
+            # Show the frame
+            cv2.imshow("Detection Test Mode", frame_with_boxes)
+            
+            # Check for key press
+            key = cv2.waitKey(1) & 0xFF
+            
+            # Process keypress commands
+            if key == ord('q'):
+                break
+            elif key == ord('p'):
+                print("\nSending person detected command...")
+                response = send_command(tx_ser, "PERSON:1")
+                people_detected = True
+                print(f"Response: {response}")
+            elif key == ord('n'):
+                print("\nSending no person detected command...")
+                response = send_command(tx_ser, "PERSON:0")
+                people_detected = False
+                print(f"Response: {response}")
+            elif key == ord('s'):
+                print("\nSending status command...")
+                response = send_command(tx_ser, "STATUS")
+                print(f"Status response: {response}")
+        
+        # Clean up
+        cap.release()
+        cv2.destroyAllWindows()
+        tx_ser.close()
+        print("Test complete. UART port and camera closed.")
+        
+    except serial.SerialException as e:
+        print(f"Error with serial port: {e}")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+
 if __name__ == "__main__":
-    main()
+    main_step1()
