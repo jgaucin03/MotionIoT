@@ -89,8 +89,15 @@ enum plotstate PlotState = Cam;
 
 
 
+// Constants for timing
+#define CAM_HOLD_MS         500    // keep camera detection visible for 0.5 seconds
+#define MIC_DEBOUNCE_SAMPLES 8     // 8 consecutive samples > threshold
+#define MIC_HOLD_MS         300    // keep "Mic" banner 0.3 seconds
+#define MIC_CHIRP_PERIOD_MS 250    // at most 4 chirps per second
 
 #define SOUND_THRESHOLD 517  // Adjused this based on testing with microphone
+
+int32_t GUIwake;                   // semaphore for waking GUI immediately
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -294,8 +301,9 @@ void Task0_Init(void){
 // Inputs:  none
 // Outputs: none
 void Task0(void){
-    uint16_t DetCount = 0;
-    uint16_t ChirpCount = 0;
+    static uint32_t camEndTime = 0;    // timestamp when detection should end
+    static uint32_t nextChirpTime = 0; // timestamp for rate-limiting chirps
+    static uint16_t yieldCounter = 0;  // counter to occasionally yield control
     
     while(1) {
         int c = UART1_ReceiveChar();
@@ -306,17 +314,23 @@ void Task0(void){
             
             // Check if it's a camera detection signal (1 or 0)
             if (c == '1') {
-                DetCount = 0;
-                if (Saw == 0 || ChirpCount >= 5) {
-                    // Play detection chirp
+                // Set detection flag and end time
+                Saw = 1;
+                camEndTime = Time + CAM_HOLD_MS;
+                OS_Signal(&GUIwake);  // Wake GUI immediately
+                
+                // Play detection chirp if enough time has passed
+                if (Time >= nextChirpTime) {
                     BSP_Buzzer_Set(512);  
-                    ChirpCount = 0;
-                    BSP_Delay1ms(100);
+                    BSP_Delay1ms(80);
+                    BSP_Buzzer_Set(0);
+                    nextChirpTime = Time + MIC_CHIRP_PERIOD_MS; // Rate-limit chirps
                 }
-                Saw = 1;  // Set camera detection flag
             }
             else if (c == '0') {
                 Saw = 0;  // Clear camera detection flag
+                camEndTime = 0;
+                OS_Signal(&GUIwake);  // Wake GUI immediately
             }
             // Process other commands
             else if (c == '\r' || c == '\n') {
@@ -330,13 +344,18 @@ void Task0(void){
             }
         }
         
-        // Manage detection timers
-        if (DetCount > 3)
-            Saw = 0;  // Auto-clear camera detection after timeout
+        // Check if camera detection timer has expired
+        if (Saw && Time >= camEndTime) {
+            Saw = 0;  // Clear flag after hold time expires
+            OS_Signal(&GUIwake);  // Wake GUI immediately
+        }
         
-        DetCount++;
-        ChirpCount++;
-        BSP_Buzzer_Set(0);  // Turn off buzzer after chirp
+        // Occasionally let other threads run by yielding
+        yieldCounter++;
+        if (yieldCounter >= 100) {  // Every ~100 passes
+            yieldCounter = 0;
+            BSP_Delay1ms(1);  // Short delay to allow other threads to run
+        }
     }
 }
 
@@ -357,66 +376,66 @@ void Task1_Init(void){
 // collects data from microphone and performs sound threshold detection
 // Inputs:  none
 // Outputs: none
+// *********Task1*********
+// collects data from microphone and performs sound threshold detection
+// Inputs:  none
+// Outputs: none
 void Task1(void){
-    uint32_t squared;
     static int32_t soundSum = 0;
-    static int time = 0; // units of microphone sampling rate
-    static bool soundDetected = false;
-    static int soundCounter = 0;     // For debouncing sound detection
-    static int soundHoldCounter = 0; // For maintaining detection state
-    static int chirpCounter = 0;     // For sound detection chirp
+    static int time = 0;  // units of microphone sampling rate
+    static uint16_t aboveCnt = 0;  // count of samples above threshold
+    static uint32_t micEndTime = 0;   // timestamp when mic detection should end
+    static uint32_t nextChirpTime = 0;  // timestamp for next chirp
+    static uint16_t yieldCounter = 0;  // counter to occasionally yield control
     
     while(1){
         Profile_Toggle0(); 
         BSP_Microphone_Input(&SoundData);
         soundSum = soundSum + (int32_t)SoundData;
         SoundArray[time] = SoundData;
-        time = time + 1;
+        time++;
         
         // Sound threshold detection when in Microphone mode
         if(PlotState == Microphone) {
             // Check if sound is above threshold
             if(SoundData > SOUND_THRESHOLD) {
-                soundCounter++;
-                // Require multiple consecutive samples above threshold
-                if(soundCounter > 8) {
-                    // If we weren't already detecting sound, play chirp
-                    if(!soundDetected && chirpCounter >= 5) {
+                aboveCnt++;
+                // First time we consider it "detected" after debounce period
+                if(aboveCnt == MIC_DEBOUNCE_SAMPLES) {
+                    Heard = 1;
+                    But1 = 0;  // Simulate button press for UI
+                    micEndTime = Time + MIC_HOLD_MS;
+                    OS_Signal(&GUIwake);  // Wake GUI immediately
+                    
+                    // Play chirp if enough time has passed
+                    if(Time >= nextChirpTime) {
                         BSP_Buzzer_Set(512);
-                        BSP_Delay1ms(50);
+                        BSP_Delay1ms(80);
                         BSP_Buzzer_Set(0);
-                        chirpCounter = 0;
+                        nextChirpTime = Time + MIC_CHIRP_PERIOD_MS;
                     }
-                    soundDetected = true;
-                    Heard = 1;       // Set global flag
-                    But1 = 0;        // Simulate button press for UI
-                    soundHoldCounter = 0; // Reset hold timeout
                 }
             } else {
-                soundCounter = 0;
-                if(soundDetected) {
-                    // Keep detection on for a while even after sound drops
-                    soundHoldCounter++;
-                    if(soundHoldCounter > 500) { // ~0.5 second hold
-                        soundDetected = false;
-                        Heard = 0;
-                        But1 = 1;    // Release simulated button
-                    }
-                }
+                aboveCnt = 0;  // Reset counter if below threshold
             }
             
-            chirpCounter++; // Increment chirp counter
-        }
-        
-        // Reset to camera input when switching modes
-        if(PlotState != Microphone) {
-            if(soundDetected) {
-                soundDetected = false;
+            // Check if mic detection timer has expired
+            if (Heard && Time >= micEndTime) {
                 Heard = 0;
-                But1 = 1;  // Release simulated button
+                But1 = 1;  // Reset simulated button press
+                OS_Signal(&GUIwake);  // Wake GUI when clearing
+            }
+        } else {
+            // Reset detection when not in mic mode
+            if(Heard) {
+                Heard = 0;
+                But1 = 1;
+                aboveCnt = 0;
+                OS_Signal(&GUIwake);  // Wake GUI when clearing
             }
         }
         
+        // Process full buffer of samples
         if(time == SOUNDRMSLENGTH){
             SoundAvg = soundSum/SOUNDRMSLENGTH;
             OS_FIFO_Put(SoundAvg);
@@ -424,8 +443,16 @@ void Task1(void){
             OS_Signal(&NewData);
             time = 0;
         }
+        
+        // Occasionally let other threads run by yielding
+        yieldCounter++;
+        if (yieldCounter >= 100) {  // Every ~100 passes
+            yieldCounter = 0;
+            BSP_Delay1ms(1);  // Short delay to allow other threads to run
+        }
     }
 }
+
 
 /* ****************************************** */
 /*          End of Task1 Section              */
@@ -468,8 +495,9 @@ void Task2(void){
     drawaxes();
     
     while(1){
-        data = OS_MailBox_Recv();
-
+        // Wait for GUI wake signal
+        OS_Wait(&GUIwake);
+        
         if(ReDrawAxes){
             drawaxes();
             ReDrawAxes = 0;
@@ -477,31 +505,32 @@ void Task2(void){
         
         OS_Wait(&LCDmutex);
         
-        // No detection
+        // No detection case
         if(But1 != 0 && Saw == 0 && Heard == 0){
             BSP_LCD_PlotPoint(30, NOCOLOR);
             BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
         } 
-        // Camera detection
-        else if((But1 == 0 && PlotState == Cam) || Saw == 1){
+        // Camera detection case - prioritize if both detected
+        else if(Saw == 1 || (But1 == 0 && PlotState == Cam)){
             BSP_LCD_PlotPoint(150, PERSONCOLOR);
             BSP_LCD_DrawString(5, 5, "Person",  PERSONCOLOR);
             BSP_LCD_DrawString(5, 6, "Detected",  PERSONCOLOR);
             BSP_LCD_DrawString(5, 7, "Camera",  PERSONCOLOR);
-            BSP_Delay1ms(25);
         }
-        // Microphone detection
-        else if((But1 == 0 && PlotState == Microphone) || Heard == 1){
+        // Microphone detection case
+        else if(Heard == 1 || (But1 == 0 && PlotState == Microphone)){
             BSP_LCD_PlotPoint(SoundData/10, SOUNDCOLOR);
             BSP_LCD_PlotPoint(150, HEARDCOLOR);
             BSP_LCD_DrawString(5, 5, "Person",  HEARDCOLOR);
             BSP_LCD_DrawString(5, 6, "Detected",  HEARDCOLOR);
             BSP_LCD_DrawString(5, 7, "Mic",  HEARDCOLOR);
-            BSP_Delay1ms(25);
         }
         
         BSP_LCD_PlotIncrement();
         OS_Signal(&LCDmutex);
+        
+        // Also process the mailbox to prevent overflow
+        data = OS_MailBox_Recv();
     }
 }
 
@@ -586,49 +615,34 @@ void Task3(void){
 // Increase to 4 threads
 int main(void){
     OS_Init();
-    Profile_Init();  // initialize the 7 hardware profiling pins
-    Task0_Init();    // microphone init
-    Task1_Init();    // accelerometer init
+    Profile_Init();
+    Task0_Init();
+    Task1_Init();
     BSP_LCD_Init();
-        BSP_LCD_FillScreen(BSP_LCD_Color565(0, 0, 0));
-        BSP_LCD_Drawaxes(PERSONCOLOR, BGCOLOR, "Time", "", 0,"", 0, 500, 0);
-        BSP_LCD_DrawString(0,1, "Security Sys",  PERSONCOLOR);
+    BSP_LCD_FillScreen(BSP_LCD_Color565(0, 0, 0));
+    BSP_LCD_Drawaxes(PERSONCOLOR, BGCOLOR, "Time", "", 0,"", 0, 500, 0);
+    BSP_LCD_DrawString(0,1, "Security Sys",  PERSONCOLOR);
+    
     Time = 0;
-    OS_InitSemaphore(&NewData, 0);  // 0 means no data
-    OS_InitSemaphore(&LCDmutex, 1); // 1 means free
-    OS_MailBox_Init();              // initialize mailbox used to send data between Task1 and Task2
-        OS_FIFO_Init();
-        // Tasks 0, 1 will not run
-    // Task2, Task3, Task4, Task5 are main threads
-    // Tasks 2 and 5 will stall
-    OS_AddThreads(&Task2, &Task3, &Task0,&Task1);
-        
-        
-            // Initialize systems
-        LED_Init();
-        
-        // Initially set LED to red to show we're starting
-        LED_Set(LED_RED);
-        Delay(1000000);
-        
-        // Initialize UART1 at 9600 baud (no PLL, using 16MHz clock)
-        UART1_Init();
-        
-        // Show ready state
-        LED_Set(LED_GREEN);
-        
-        // Send startup message
-        UART1_SendString("\r\nTIVA C Command Processor Ready\r\n");
-        
-        
-
-    //	
-        
-    // when grading change 1000 to 4-digit number from edX
-    OS_Launch(BSP_Clock_GetFreq()/THREADFREQ); // doesn't return, interrupts enabled in here
-        
-        
-        
-    return 0;             // this never executes
+    OS_InitSemaphore(&NewData, 0);
+    OS_InitSemaphore(&LCDmutex, 1);
+    OS_InitSemaphore(&GUIwake, 0);  // Initialize GUI wake semaphore
+    OS_MailBox_Init();
+    OS_FIFO_Init();
+    
+    OS_AddThreads(&Task2, &Task3, &Task0, &Task1);
+    
+    // Initialize hardware
+    LED_Init();
+    LED_Set(LED_RED);
+    Delay(1000000);
+    UART1_Init();
+    LED_Set(LED_GREEN);
+    UART1_SendString("\r\nTIVA C Command Processor Ready\r\n");
+    
+    // Launch OS
+    OS_Launch(BSP_Clock_GetFreq()/THREADFREQ);
+    
+    return 0;  // Never reaches here
 }
  
