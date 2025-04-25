@@ -1,0 +1,6 @@
+# Requirements for the MotionIoT PC application
+
+opencv-python>=4.9.0
+numpy>=1.23.0
+pyserial>=3.5
+pillow>=9.4.0
