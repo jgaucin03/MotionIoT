@@ -1,3 +1,11 @@
+# Ignore cache
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+
+# Ignore system cache
+.DS_Store
+
 # Ignore models
 *.pt
 *.weights
@@ -10,3 +18,14 @@
 *.pb
 *.onnx*
 *.names
+
+# Ignore LaTex build files
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
