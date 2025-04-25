@@ -55,7 +55,7 @@ The project consists of two main components:
    
 2. **HC-05 Bluetooth Connection**:
    - Connect the HC-05 module to the Tiva-C using UART1:
-     - HC-05 VCC → 3.3V
+     - HC-05 VCC → 5V
      - HC-05 GND → GND
      - HC-05 TXD → Tiva PB0 (UART1 RX)
      - HC-05 RXD → Tiva PB1 (UART1 TX)
