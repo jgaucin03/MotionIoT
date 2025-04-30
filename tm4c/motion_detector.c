@@ -1,3 +1,4 @@
+// motion_detector.c
 #include <stdint.h>
 #include "../inc/BSP.h"
 #include "../inc/Profile.h"
@@ -163,19 +164,12 @@ void Task1_Init(void){
 BSP_Microphone_Init();
 }
 // *********Task1: Takes in shound data and determines if sound detection occurs*********
-
-
  #define SOUND_THRESHOLD 517  // Adjused this based on testing with microphone
- 
-
-
  void Task1(void){
      static int32_t soundSum = 0;
      static int time = 0; // units of microphone sampling rate
      static int soundCounter = 0;  // For debouncing sound detection
 	 uint16_t HDetCount = 0;
-	 
-	 
      while(1){
          Profile_Toggle0(); 
          BSP_Microphone_Input(&SoundData);
@@ -191,8 +185,7 @@ BSP_Microphone_Init();
                  if(soundCounter > 10) {  // Require multiple samples above threshold
 									 
 									 HDetCount = 0;
-                     Heard = 1;
-                     
+                     Heard = 1;                    
                  }
              } else {
                  soundCounter = 0;
@@ -203,17 +196,8 @@ BSP_Microphone_Init();
 						 if(Heard){
 						 HDetCount++;
 							 BSP_Delay1ms(27);
-						 }
-						 
-         }
-         
-         if(time == SOUNDRMSLENGTH){
-             SoundAvg = soundSum/SOUNDRMSLENGTH;
-             OS_FIFO_Put(SoundAvg);
-             soundSum = 0;
-             OS_Signal(&NewData); // makes task5 run every 1 sec
-             time = 0;
-         }
+						 }						 
+         }        
      }
  }
 
@@ -225,11 +209,9 @@ void Task2(void){
 
 // if both buttons pressed, Arm or disarm the system.
     OS_Wait(&LCDmutex);
-		if (But2 == 0 && But1 == 0)
-		{
+		if (But2 == 0 && But1 == 0){
 			// button hold time to activate buttons.
-			if(ArmCount >= 10)
-			{
+			if(ArmCount >= 10){
 				// if system is on, disarm, and chirp 3 times
 				if(Armed == On)
 					Armed = Off;
@@ -238,12 +220,10 @@ void Task2(void){
 				
 				BSP_Buzzer_Set(512);  
 							BSP_Delay1ms(100);
-							BSP_Buzzer_Set(0);
-				
+							BSP_Buzzer_Set(0);				
 				BSP_Buzzer_Set(512);  
 							BSP_Delay1ms(100);
-							BSP_Buzzer_Set(0);
-								
+							BSP_Buzzer_Set(0);								
 				BSP_Buzzer_Set(512);  
 							BSP_Delay1ms(100);
 							BSP_Buzzer_Set(0);
@@ -259,8 +239,7 @@ void Task2(void){
 
 				BSP_Buzzer_Set(512);  
 							BSP_Delay1ms(100);
-							BSP_Buzzer_Set(0);
-				
+							BSP_Buzzer_Set(0);			
 				BSP_Buzzer_Set(512);  
 							BSP_Delay1ms(100);
 							BSP_Buzzer_Set(0);
@@ -319,20 +298,14 @@ void Task2(void){
 			BSP_LCD_DrawString(5, 6, "Detected",  HEARDCOLOR);
 			BSP_LCD_DrawString(5, 7, "Mic",  HEARDCOLOR);
 			
-			BSP_Delay1ms(25);
-			
-			
-			
+			BSP_Delay1ms(25);			
     } 
 		//If system is armed but no inputs recived, draw a white line at bottom of screen.
 		else if((Saw == 0 && PlotState == Cam) || But2 != 0  ){
       BSP_LCD_PlotPoint(30, NOCOLOR);
 			
-			BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);
-			
+			BSP_LCD_FillRect(25, 40, 90, 40, LCD_BLACK);			
     } 
-		
-
     BSP_LCD_PlotIncrement();
     OS_Signal(&LCDmutex);
   }
